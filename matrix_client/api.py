@@ -14,8 +14,11 @@
 # limitations under the License.
 
 import json
+import threading
+from time import time, sleep, clock
+from functools import wraps
+
 import requests
-from time import time, sleep
 from .errors import MatrixError, MatrixRequestError, MatrixHttpLibError
 
 try:
@@ -25,6 +28,34 @@ except ImportError:
 
 MATRIX_V2_API_PATH = "/_matrix/client/r0"
 
+def rate_limited(max_per_second):
+    """
+    Decorator that make functions not be called faster than
+    """
+    lock = threading.Lock()
+    min_interval = 1.0 / float(max_per_second)
+
+    def decorate(func):
+        last_time_called = [0.0]
+
+        @wraps(func)
+        def rate_limited_function(*args, **kwargs):
+            lock.acquire()
+            elapsed = clock() - last_time_called[0]
+            left_to_wait = min_interval - elapsed
+
+            if left_to_wait > 0:
+                sleep(left_to_wait)
+
+            lock.release()
+
+            ret = func(*args, **kwargs)
+            last_time_called[0] = clock()
+            return ret
+
+        return rate_limited_function
+
+    return decorate
 
 class MatrixHttpApi(object):
     """Contains all raw Matrix HTTP Client-Server API calls.
@@ -616,6 +647,7 @@ class MatrixHttpApi(object):
                           "/user/{userId}/filter".format(userId=user_id),
                           filter_params)
 
+    @rate_limited(0.2)
     def _send(self, method, path, content=None, query_params={}, headers={},
               api_path=MATRIX_V2_API_PATH):
         method = method.upper()
